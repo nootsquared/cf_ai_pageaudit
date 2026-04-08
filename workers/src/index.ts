@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { runAnalysis } from './analyze';
 
 // ─── Shared Types ────────────────────────────────────────────────────────────
 // These are the public contract. When adding AI later, import these in the
@@ -116,6 +117,8 @@ export default {
       initUrl.searchParams.set("id", jobId);
       initUrl.searchParams.set("url", body.url);
       await stub.fetch(initUrl.toString());
+
+      ctx.waitUntil(runAnalysis(stub, body.url, env));
 
       return Response.json({ jobId }, { status: 201 });
     }
