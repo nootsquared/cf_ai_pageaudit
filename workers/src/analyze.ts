@@ -2,6 +2,57 @@ import type { Claim } from './index';
 import { extractClaims } from './extract';
 import { searchClaim, TavilyResult } from './search';
 
+// Step 1: Ask the LLM to generate focused search queries for a claim
+async function generateSearchQueries(
+  claim: string,
+  articleTitle: string,
+  env: Env
+): Promise<string[]> {
+  try {
+    const result = (await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast' as any, {
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a research assistant. Given a claim from a news article, generate 2-3 short, focused search queries to find evidence that could verify or refute it. Respond with ONLY a JSON array of strings, no other text. Example: ["query one", "query two", "query three"]',
+        },
+        {
+          role: 'user',
+          content: `Article: ${articleTitle}\nClaim: ${claim}`,
+        },
+      ],
+    })) as { response: string };
+
+    console.log(`[generateSearchQueries] raw response for "${claim.slice(0, 60)}...":`, result.response);
+
+    const jsonMatch = result.response.trim().match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error('No JSON array in response');
+
+    const queries = JSON.parse(jsonMatch[0]) as unknown[];
+    return queries
+      .filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+      .slice(0, 3);
+  } catch (e) {
+    console.log(`[generateSearchQueries] failed, falling back to raw claim:`, e);
+    return [claim];
+  }
+}
+
+// Step 2: Search Tavily for each query and combine results (deduplicated by URL)
+async function searchWithQueries(queries: string[], apiKey: string): Promise<TavilyResult[]> {
+  const allResults = await Promise.all(queries.map((q) => searchClaim(q, apiKey)));
+  const seen = new Set<string>();
+  const deduped: TavilyResult[] = [];
+  for (const result of allResults.flat()) {
+    if (!seen.has(result.url)) {
+      seen.add(result.url);
+      deduped.push(result);
+    }
+  }
+  return deduped;
+}
+
+// Step 3: Evaluate the claim against the gathered evidence
 async function evaluateClaim(
   claim: string,
   evidence: TavilyResult[],
@@ -27,9 +78,11 @@ async function evaluateClaim(
       ],
     })) as { response: string };
 
-    // Extract JSON — model sometimes wraps it in markdown code fences
-    const jsonMatch = result.response.trim().match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON in response');
+    console.log(`[evaluateClaim] raw response for "${claim.slice(0, 60)}...":`, result.response);
+
+    // Extract JSON — handle markdown code fences and extra surrounding text
+    const jsonMatch = result.response.trim().match(/\{[\s\S]*?\}/);
+    if (!jsonMatch) throw new Error('No JSON object in response');
 
     const parsed = JSON.parse(jsonMatch[0]) as { verdict: string; explanation: string };
     if (!['true', 'false', 'uncertain'].includes(parsed.verdict)) {
@@ -41,7 +94,8 @@ async function evaluateClaim(
       verdict: parsed.verdict as Claim['verdict'],
       explanation: String(parsed.explanation),
     };
-  } catch {
+  } catch (e) {
+    console.log(`[evaluateClaim] failed:`, e);
     return { text: claim, verdict: 'uncertain', explanation: 'Could not evaluate.' };
   }
 }
@@ -62,7 +116,9 @@ export async function runAnalysis(
   try {
     await postToStub(stub, { status: 'processing' });
 
-    const claimTexts = await extractClaims(url);
+    const { title, claims: claimTexts } = await extractClaims(url);
+    console.log(`[runAnalysis] extracted ${claimTexts.length} claims from "${title}"`);
+
     const allClaims: Claim[] = [];
     const batchSize = 5;
 
@@ -70,7 +126,9 @@ export async function runAnalysis(
       const batch = claimTexts.slice(i, i + batchSize);
       const results = await Promise.all(
         batch.map(async (claim) => {
-          const evidence = await searchClaim(claim, env.TAVILY_API_KEY);
+          const queries = await generateSearchQueries(claim, title, env);
+          console.log(`[runAnalysis] queries for claim:`, queries);
+          const evidence = await searchWithQueries(queries, env.TAVILY_API_KEY);
           return evaluateClaim(claim, evidence, env);
         })
       );

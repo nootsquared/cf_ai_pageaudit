@@ -1,4 +1,23 @@
-export async function extractClaims(url: string): Promise<string[]> {
+export type ExtractionResult = {
+  title: string;
+  claims: string[];
+};
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(Number(dec)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+export async function extractClaims(url: string): Promise<ExtractionResult> {
   const response = await fetch(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (compatible; SiteSeer/1.0; +https://siteseer.dev)',
@@ -10,10 +29,14 @@ export async function extractClaims(url: string): Promise<string[]> {
 
   const blocks: string[] = [];
   let current = '';
+  let title = '';
 
-  // Collect text block-by-block from content elements.
-  // Each element handler resets `current` on open and flushes on close.
   const rewriter = new HTMLRewriter()
+    .on('title', {
+      text(chunk) {
+        title += chunk.text;
+      },
+    })
     .on('p, h1, h2, h3, h4, h5, h6, li, blockquote, td', {
       element(el) {
         if (current.trim()) {
@@ -34,14 +57,16 @@ export async function extractClaims(url: string): Promise<string[]> {
 
   await rewriter.transform(response).arrayBuffer();
 
-  // Split each block into sentences, filter short ones
+  // Decode entities, split into sentences, filter short ones
   const sentences = blocks.flatMap((block) =>
-    block
+    decodeHtmlEntities(block)
       .split(/(?<=[.!?])\s+/)
       .map((s) => s.trim())
       .filter((s) => s.length >= 40 && s.split(/\s+/).length >= 6)
   );
 
-  // Deduplicate
-  return [...new Set(sentences)];
+  return {
+    title: decodeHtmlEntities(title.trim()),
+    claims: [...new Set(sentences)],
+  };
 }
