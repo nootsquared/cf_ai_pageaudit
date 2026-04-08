@@ -1,64 +1,136 @@
 import { DurableObject } from "cloudflare:workers";
 
-/**
- * Welcome to Cloudflare Workers! This is your first Durable Objects application.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your Durable Object in action
- * - Run `npm run deploy` to publish your application
- *
- * Bind resources to your worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/durable-objects
- */
+// ─── Shared Types ────────────────────────────────────────────────────────────
+// These are the public contract. When adding AI later, import these in the
+// analysis function so it can POST patches back to the DO.
 
-/** A Durable Object's behavior is defined in an exported Javascript class */
-export class MyDurableObject extends DurableObject<Env> {
-	/**
-	 * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
-	 * 	`DurableObjectStub::get` for a given identifier (no-op constructors can be omitted)
-	 *
-	 * @param ctx - The interface for interacting with Durable Object state
-	 * @param env - The interface to reference bindings declared in wrangler.jsonc
-	 */
-	constructor(ctx: DurableObjectState, env: Env) {
-		super(ctx, env);
-	}
+export type JobStatus = "pending" | "processing" | "complete" | "error";
 
-	/**
-	 * The Durable Object exposes an RPC method sayHello which will be invoked when a Durable
-	 *  Object instance receives a request from a Worker via the same method invocation on the stub
-	 *
-	 * @param name - The name provided to a Durable Object instance from a Worker
-	 * @returns The greeting to be sent back to the Worker
-	 */
-	async sayHello(name: string): Promise<string> {
-		return `Hello, ${name}!`;
-	}
+export type Claim = {
+  text: string;
+  verdict: "true" | "false" | "uncertain";
+  explanation: string;
+};
+
+export type JobState = {
+  id: string;
+  url: string;
+  status: JobStatus;
+  claims: Claim[];
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+// ─── Durable Object ──────────────────────────────────────────────────────────
+
+export class JobTracker extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const reqUrl = new URL(request.url);
+
+    if (request.method === "GET") {
+      const state = await this.ctx.storage.get<JobState>("job");
+
+      if (!state) {
+        // Initialization path: called by POST /jobs with id + url params
+        const id = reqUrl.searchParams.get("id");
+        const jobUrl = reqUrl.searchParams.get("url");
+
+        if (id && jobUrl) {
+          const now = Date.now();
+          const newState: JobState = {
+            id,
+            url: jobUrl,
+            status: "pending",
+            claims: [],
+            createdAt: now,
+            updatedAt: now,
+          };
+          await this.ctx.storage.put("job", newState);
+          return Response.json(newState, { status: 201 });
+        }
+
+        // Status check on a non-existent job
+        return Response.json({ error: "Job not found" }, { status: 404 });
+      }
+
+      return Response.json(state);
+    }
+
+    if (request.method === "POST") {
+      // Patch path: called to update status/claims/error.
+      // id, url, and createdAt are immutable — preserved from stored state.
+      // To add AI later: POST { status: "processing" } before the AI call,
+      // then POST { status: "complete", claims: [...] } or { status: "error", error: "..." }.
+      const existing = await this.ctx.storage.get<JobState>("job");
+      if (!existing) {
+        return Response.json({ error: "Job not found" }, { status: 404 });
+      }
+
+      const patch = await request.json<Partial<JobState>>();
+      const updated: JobState = {
+        ...existing,
+        ...patch,
+        id: existing.id,
+        url: existing.url,
+        createdAt: existing.createdAt,
+        updatedAt: Date.now(),
+      };
+      await this.ctx.storage.put("job", updated);
+      return Response.json(updated);
+    }
+
+    return new Response("Method Not Allowed", { status: 405 });
+  }
 }
 
+// ─── Worker Fetch Handler ────────────────────────────────────────────────────
+
 export default {
-	/**
-	 * This is the standard fetch handler for a Cloudflare Worker
-	 *
-	 * @param request - The request submitted to the Worker from the client
-	 * @param env - The interface to reference bindings declared in wrangler.jsonc
-	 * @param ctx - The execution context of the Worker
-	 * @returns The response to be sent back to the client
-	 */
-	async fetch(request, env, ctx): Promise<Response> {
-		// Create a stub to open a communication channel with the Durable Object
-		// instance named "foo".
-		//
-		// Requests from all Workers to the Durable Object instance named "foo"
-		// will go to a single remote Durable Object instance.
-		const stub = env.MY_DURABLE_OBJECT.getByName("foo");
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+    const parts = url.pathname.split("/").filter(Boolean);
 
-		// Call the `sayHello()` RPC method on the stub to invoke the method on
-		// the remote Durable Object instance.
-		const greeting = await stub.sayHello("world");
+    // POST /jobs — submit a URL, get back a job ID
+    if (request.method === "POST" && parts[0] === "jobs" && parts.length === 1) {
+      let body: { url?: unknown };
+      try {
+        body = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+      }
 
-		return new Response(greeting);
-	},
+      if (!body.url || typeof body.url !== "string") {
+        return Response.json({ error: "Missing required field: url" }, { status: 400 });
+      }
+
+      const jobId = crypto.randomUUID();
+      const stub = env.JOB_TRACKER.get(env.JOB_TRACKER.idFromName(jobId));
+
+      // Initialize the DO state by calling GET with id + url params
+      const initUrl = new URL("https://do.internal/");
+      initUrl.searchParams.set("id", jobId);
+      initUrl.searchParams.set("url", body.url);
+      await stub.fetch(initUrl.toString());
+
+      return Response.json({ jobId }, { status: 201 });
+    }
+
+    // GET /jobs/:id — check status and results
+    if (request.method === "GET" && parts[0] === "jobs" && parts.length === 2) {
+      const jobId = parts[1];
+      const stub = env.JOB_TRACKER.get(env.JOB_TRACKER.idFromName(jobId));
+      const doRes = await stub.fetch("https://do.internal/");
+
+      // Preserve the DO's status code (404 if job not found)
+      const body = await doRes.json();
+      return Response.json(body, { status: doRes.status });
+    }
+
+    return new Response("Method Not Allowed", { status: 405 });
+  },
 } satisfies ExportedHandler<Env>;
