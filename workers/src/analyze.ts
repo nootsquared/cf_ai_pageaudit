@@ -26,6 +26,67 @@ async function postPatch(
   });
 }
 
+// ─── LLM: claim filtering ───────────────────────────────────────────────────
+
+async function filterToVerifiableClaims(
+  sentences: string[],
+  title: string,
+  env: Env,
+): Promise<string[]> {
+  // Process in chunks to stay within context limits
+  const chunkSize = 30;
+  const kept: string[] = [];
+
+  for (let i = 0; i < sentences.length; i += chunkSize) {
+    const chunk = sentences.slice(i, i + chunkSize);
+    const numbered = chunk.map((s, idx) => `${idx + 1}. ${s}`).join('\n');
+
+    try {
+      const result = (await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast' as any, {
+        messages: [
+          {
+            role: 'system',
+            content: `You are a claim extractor. Given numbered sentences from a news article, return ONLY the numbers of sentences that are VERIFIABLE FACTUAL CLAIMS — statements that can be checked against external evidence (statistics, dates, events, scientific facts, legal rulings, etc.).
+
+EXCLUDE:
+- Opinions, analysis, or editorial commentary
+- Quotes or attributions ("X said…", "according to X…") unless they contain a specific checkable fact
+- Vague or subjective statements
+- Descriptions of emotions or reactions
+- Transition sentences or article structure
+- Duplicate or near-duplicate claims
+
+Return a JSON array of the numbers to KEEP. Aim for the 10-15 strongest, most specific claims. Example: [1, 4, 7, 12]`,
+          },
+          {
+            role: 'user',
+            content: `Article: ${title}\n\nSentences:\n${numbered}`,
+          },
+        ],
+      })) as { response: string };
+
+      const responseText =
+        typeof result.response === 'string' ? result.response : JSON.stringify(result.response);
+      const jsonMatch = responseText.trim().match(/\[[\s\S]*?\]/);
+      if (jsonMatch) {
+        const indices = JSON.parse(jsonMatch[0]) as unknown[];
+        for (const idx of indices) {
+          const n = Number(idx);
+          if (Number.isInteger(n) && n >= 1 && n <= chunk.length) {
+            kept.push(chunk[n - 1]);
+          }
+        }
+      }
+    } catch {
+      // On failure, fall back to keeping the chunk as-is
+      kept.push(...chunk);
+    }
+  }
+
+  // Cap at 20 claims max to keep analysis focused
+  return kept.slice(0, 20);
+}
+
 // ─── LLM: query generation ──────────────────────────────────────────────────
 
 async function generateSearchQueries(
@@ -197,7 +258,7 @@ export async function runAnalysis(
       appendTasks: [task('fetch', 'Downloading page HTML')],
     });
 
-    const { title, claims: claimTexts } = await extractClaims(url);
+    const { title, claims: rawSentences } = await extractClaims(url);
 
     await postPatch(stub, {
       phase: 'extracting',
@@ -209,10 +270,18 @@ export async function runAnalysis(
     });
 
     await postPatch(stub, {
+      appendTasks: [
+        task('extract', `Segmented ${rawSentences.length} candidate sentences`),
+        task('extract', 'Filtering to verifiable factual claims…', 'running'),
+      ],
+    });
+
+    const claimTexts = await filterToVerifiableClaims(rawSentences, title, env);
+
+    await postPatch(stub, {
       totalClaims: claimTexts.length,
       appendTasks: [
-        task('extract', `Segmented ${claimTexts.length} candidate claims`),
-        task('extract', 'Deduplicating & filtering short sentences'),
+        task('extract', `Kept ${claimTexts.length} verifiable claims from ${rawSentences.length} sentences`),
       ],
     });
 

@@ -4,6 +4,12 @@ A record of prompts used while building this project.
 
 ---
 
+## 10 — Session Query Sidebar, Stats & Retry
+
+> I want to include past queries for the application. On the left side open a bar that shows the past queries in this session (warn the user that the queries that they will receive are not persistent throughout refreshes or new instances of the app). Then, keep track of all the output stats from the link, and add in a new query entry to the side whenever you do a new request. Add a new button to each page for a re-try to try again if you need to, and when you start add a new entry on the left that says loading with the overall progress as the same pie chart format on the left with the name of the website title. On hover you can see condensed details on the site using the tooltip component we added earlier, to make it look really professional and well made. You should be able to toggle this panel if you don't want to see it as well, but it should be there on by default.
+
+---
+
 ## 9 — Pipeline Agents UI & Source Trust Filtering
 
 > For the pipeline agents, I want you to change it so instead of a bar you have a pie chart icon to the left of the agent that is running, and for each pipeline agent I want you to list out all the tasks. If there are 42 tasks then add something where it shows a bunch of tasks and rotates, so if the first task is done then you move onto the next task like a vertical carousel, but it should show everything the backend is doing, even the small bits. Then what I want you to do is add something that checks the results from the API, to check that the sources are sites that can be trusted. For example, the majority of the sources right now are youtube, facebook, bbc (itself), instagram, and other news outlets which are very bad sources. Add a check that will ensure that one, no matter what the page can't be verified by a site from itself, and two the source is not a major social media platform or a platform with general bias to their statements. Look for official transcripts, articles that are stated to be true, etc. Ensure that the sources are accurate and trustworthy sources so our outputs can be too.

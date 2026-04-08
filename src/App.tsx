@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ExternalLink, Globe, Code } from "lucide-react";
 import { DotGridBackground } from "./components/ui/dot-grid-background";
@@ -6,6 +6,10 @@ import { EncryptedText } from "./components/ui/encrypted-text";
 import { Tooltip } from "./components/ui/tooltip-card";
 import { GooeyInput } from "./components/ui/gooey-input";
 import { Dashboard } from "./components/ui/dashboard";
+import {
+  QueryHistorySidebar,
+  type QueryHistoryEntry,
+} from "./components/ui/query-history-sidebar";
 import { createJob, isValidUrl, verifyUrl } from "./lib/api";
 import "./App.css";
 
@@ -47,9 +51,40 @@ type SubmitState =
   | { kind: "error"; message: string }
   | { kind: "active"; jobId: string; url: string };
 
+let entryCounter = 0;
+
 export default function App() {
   const [inputUrl, setInputUrl] = useState("");
   const [submit, setSubmit] = useState<SubmitState>({ kind: "idle" });
+  const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
+
+  const addHistoryEntry = useCallback((jobId: string, url: string) => {
+    entryCounter += 1;
+    const entry: QueryHistoryEntry = {
+      id: `q-${entryCounter}-${Date.now()}`,
+      jobId,
+      url,
+      status: "loading",
+      score: 0,
+      overallProgress: 4,
+      trueClaims: 0,
+      falseClaims: 0,
+      uncertainClaims: 0,
+      totalClaims: 0,
+      processedClaims: 0,
+      timestamp: Date.now(),
+    };
+    setQueryHistory((prev) => [entry, ...prev]);
+  }, []);
+
+  const updateHistoryEntry = useCallback(
+    (jobId: string, updates: Partial<QueryHistoryEntry>) => {
+      setQueryHistory((prev) =>
+        prev.map((e) => (e.jobId === jobId ? { ...e, ...updates } : e)),
+      );
+    },
+    [],
+  );
 
   const handleSubmit = async () => {
     const raw = inputUrl.trim();
@@ -75,6 +110,7 @@ export default function App() {
     try {
       const jobId = await createJob(normalized);
       setSubmit({ kind: "active", jobId, url: normalized });
+      addHistoryEntry(jobId, normalized);
     } catch (e) {
       setSubmit({ kind: "error", message: (e as Error).message });
     }
@@ -85,119 +121,152 @@ export default function App() {
     setInputUrl("");
   };
 
+  const handleRetry = async (entry: QueryHistoryEntry) => {
+    setSubmit({ kind: "verifying" });
+    setInputUrl(entry.url);
+
+    try {
+      const jobId = await createJob(entry.url);
+      setSubmit({ kind: "active", jobId, url: entry.url });
+      addHistoryEntry(jobId, entry.url);
+    } catch (e) {
+      setSubmit({ kind: "error", message: (e as Error).message });
+    }
+  };
+
+  const handleSelectHistory = (entry: QueryHistoryEntry) => {
+    setSubmit({ kind: "active", jobId: entry.jobId, url: entry.url });
+  };
+
   const isVerifying = submit.kind === "verifying";
   const errorMessage = submit.kind === "error" ? submit.message : null;
   const active = submit.kind === "active" ? submit : null;
 
   return (
-    <div className="app-root">
-      <AnimatePresence mode="wait">
-        {!active ? (
-          /* ── Landing ── */
-          <motion.div
-            key="landing"
-            className="landing-view"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0, scale: 0.97 }}
-            transition={{ duration: 0.25 }}
-          >
-            <DotGridBackground />
+    <div className="app-root" style={{ display: "flex", flexDirection: "row" }}>
+      {/* Query History Sidebar — always present when there are entries or active job */}
+      {(queryHistory.length > 0 || active) && (
+        <QueryHistorySidebar
+          entries={queryHistory}
+          activeJobId={active?.jobId ?? null}
+          onSelect={handleSelectHistory}
+          onRetry={handleRetry}
+        />
+      )}
 
-            <div className="content-center">
-              <h1 className="siteseer-title">
-                <EncryptedText
-                  text="site-seer"
-                  revealDelayMs={65}
-                  flipDelayMs={40}
-                  encryptedClassName="char-encrypted"
-                  revealedClassName="char-revealed"
-                />
-              </h1>
+      {/* Main content area */}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <AnimatePresence mode="wait">
+          {!active ? (
+            /* ── Landing ── */
+            <motion.div
+              key="landing"
+              className="landing-view"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.25 }}
+              style={{ position: "relative" }}
+            >
+              <DotGridBackground />
 
-              <p className="subtitle-text">
-                Developed by{" "}
-                <Tooltip content={developerLinks} containerClassName="inline">
-                  <span className="developer-name">Pranav Maringanti</span>
-                </Tooltip>
-              </p>
-
-              <div className="input-section">
-                <span className="input-pretext">
-                  {isVerifying ? "Verifying URL…" : "Enter website URL"}
-                </span>
-
-                <div
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !isVerifying && inputUrl.trim()) handleSubmit();
-                  }}
-                  style={{ opacity: isVerifying ? 0.55 : 1, transition: "opacity 0.2s" }}
-                >
-                  <GooeyInput
-                    value={inputUrl}
-                    onValueChange={(v) => {
-                      setInputUrl(v);
-                      if (submit.kind === "error") setSubmit({ kind: "idle" });
-                    }}
-                    placeholder="Enter website URL"
-                    expandedWidth={420}
-                    collapsedWidth={280}
-                    expandedOffset={44}
-                    classNames={{
-                      trigger: "gooey-search-field",
-                      input: "gooey-search-field",
-                    }}
+              <div className="content-center">
+                <h1 className="siteseer-title">
+                  <EncryptedText
+                    text="site-seer"
+                    revealDelayMs={65}
+                    flipDelayMs={40}
+                    encryptedClassName="char-encrypted"
+                    revealedClassName="char-revealed"
                   />
-                </div>
+                </h1>
 
-                <AnimatePresence mode="wait">
-                  {errorMessage ? (
-                    <motion.p
-                      key="err"
-                      className="input-subtext"
-                      initial={{ opacity: 0, y: -4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -4 }}
-                      transition={{ duration: 0.18 }}
-                      style={{ color: "#b91c1c" }}
-                    >
-                      {errorMessage}
-                    </motion.p>
-                  ) : isVerifying ? (
-                    <motion.p
-                      key="ver"
-                      className="input-subtext"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                    >
-                      Checking that the link is reachable…
-                    </motion.p>
-                  ) : (
-                    <motion.p
-                      key="idle"
-                      className="input-subtext"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                    >
-                      Add a URL to parse through and scan for false information
-                    </motion.p>
-                  )}
-                </AnimatePresence>
+                <p className="subtitle-text">
+                  Developed by{" "}
+                  <Tooltip content={developerLinks} containerClassName="inline">
+                    <span className="developer-name">Pranav Maringanti</span>
+                  </Tooltip>
+                </p>
+
+                <div className="input-section">
+                  <span className="input-pretext">
+                    {isVerifying ? "Verifying URL…" : "Enter website URL"}
+                  </span>
+
+                  <div
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !isVerifying && inputUrl.trim()) handleSubmit();
+                    }}
+                    style={{ opacity: isVerifying ? 0.55 : 1, transition: "opacity 0.2s" }}
+                  >
+                    <GooeyInput
+                      value={inputUrl}
+                      onValueChange={(v) => {
+                        setInputUrl(v);
+                        if (submit.kind === "error") setSubmit({ kind: "idle" });
+                      }}
+                      placeholder="Enter website URL"
+                      expandedWidth={420}
+                      collapsedWidth={280}
+                      expandedOffset={44}
+                      classNames={{
+                        trigger: "gooey-search-field",
+                        input: "gooey-search-field",
+                      }}
+                    />
+                  </div>
+
+                  <AnimatePresence mode="wait">
+                    {errorMessage ? (
+                      <motion.p
+                        key="err"
+                        className="input-subtext"
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        transition={{ duration: 0.18 }}
+                        style={{ color: "#b91c1c" }}
+                      >
+                        {errorMessage}
+                      </motion.p>
+                    ) : isVerifying ? (
+                      <motion.p
+                        key="ver"
+                        className="input-subtext"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                      >
+                        Checking that the link is reachable…
+                      </motion.p>
+                    ) : (
+                      <motion.p
+                        key="idle"
+                        className="input-subtext"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                      >
+                        Add a URL to parse through and scan for false information
+                      </motion.p>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
-            </div>
-          </motion.div>
-        ) : (
-          /* ── Dashboard ── */
-          <Dashboard
-            key="dashboard"
-            jobId={active.jobId}
-            url={active.url}
-            onReset={handleReset}
-          />
-        )}
-      </AnimatePresence>
+            </motion.div>
+          ) : (
+            /* ── Dashboard ── */
+            <Dashboard
+              key={active.jobId}
+              jobId={active.jobId}
+              url={active.url}
+              onReset={handleReset}
+              onRetry={() => handleRetry({ jobId: active.jobId, url: active.url } as QueryHistoryEntry)}
+              onStateUpdate={(updates) => updateHistoryEntry(active.jobId, updates)}
+            />
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }

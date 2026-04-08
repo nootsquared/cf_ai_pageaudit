@@ -6,7 +6,9 @@
   position: relative;
   width: 100vw;
   min-height: 100svh;
+  height: 100svh;
   background: #ffffff;
+  overflow: hidden;
 }
 
 /* ═══════════════════════════════════════════════
@@ -14,8 +16,9 @@
 ═══════════════════════════════════════════════ */
 
 .landing-view {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  width: 100%;
+  min-height: 100svh;
   display: flex;
   align-items: center;
   justify-content: center;

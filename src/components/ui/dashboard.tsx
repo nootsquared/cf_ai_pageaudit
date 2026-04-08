@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   AnimatePresence,
   motion,
@@ -8,6 +8,7 @@ import {
   useTransform,
 } from "motion/react";
 import { useJob } from "../../lib/useJob";
+import { RotateCw } from "lucide-react";
 import type {
   AgentKey,
   Claim,
@@ -17,6 +18,7 @@ import type {
   TaskLogEntry,
   Verdict,
 } from "../../lib/api";
+import type { QueryHistoryEntry } from "./query-history-sidebar";
 
 // ── Filters ─────────────────────────────────────────────────────────────────
 
@@ -60,22 +62,22 @@ function DonutChart({ score }: { score: number }) {
   }, [score, mv]);
 
   return (
-    <div className="relative" style={{ width: 80, height: 80 }}>
-      <svg width="80" height="80" viewBox="0 0 100 100" style={{ transform: "rotate(-90deg)" }}>
-        <circle cx="50" cy="50" r={r} fill="none" stroke="#e4e4e7" strokeWidth="12" />
+    <div className="relative" style={{ width: 88, height: 88 }}>
+      <svg width="88" height="88" viewBox="0 0 100 100" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="50" cy="50" r={r} fill="none" stroke="#e4e4e7" strokeWidth="8" />
         <motion.circle
           cx="50"
           cy="50"
           r={r}
           fill="none"
           stroke="#18181b"
-          strokeWidth="12"
+          strokeWidth="8"
           strokeLinecap="butt"
           strokeDasharray={circumference}
           style={{ strokeDashoffset: offset }}
         />
       </svg>
-      <motion.span className="absolute inset-0 flex items-center justify-center text-base font-semibold text-zinc-900">
+      <motion.span className="absolute inset-0 flex items-center justify-center text-sm font-semibold text-zinc-900 tabular-nums">
         {text}
       </motion.span>
     </div>
@@ -243,9 +245,11 @@ interface DashboardProps {
   jobId: string;
   url: string;
   onReset?: () => void;
+  onRetry?: () => void;
+  onStateUpdate?: (updates: Partial<QueryHistoryEntry>) => void;
 }
 
-export function Dashboard({ jobId, url, onReset }: DashboardProps) {
+export function Dashboard({ jobId, url, onReset, onRetry, onStateUpdate }: DashboardProps) {
   const { state, pollError } = useJob(jobId);
   const [activeFilter, setActiveFilter] = useState<FilterTab>("all");
 
@@ -273,14 +277,14 @@ export function Dashboard({ jobId, url, onReset }: DashboardProps) {
   // haven't received a verdict for it yet. These appear as dashed placeholders.
   const pendingCount = Math.max(0, totalClaims - claims.length);
 
-  // Weighted credibility score — true counts full, uncertain half, false zero.
+  // Credibility score — only claims with evidence (true/false) count.
+  // Uncertain claims are excluded: no evidence ≠ half-credible.
   const evaluated = claims.length;
   const score = useMemo(() => {
-    if (evaluated === 0) return 0;
-    const weighted =
-      trueClaims.length * 100 + uncertainClaims.length * 50 + falseClaims.length * 0;
-    return Math.round(weighted / evaluated);
-  }, [evaluated, trueClaims.length, uncertainClaims.length, falseClaims.length]);
+    const evidenced = trueClaims.length + falseClaims.length;
+    if (evidenced === 0) return evaluated > 0 ? 50 : 0; // all uncertain → neutral
+    return Math.round((trueClaims.length / evidenced) * 100);
+  }, [evaluated, trueClaims.length, falseClaims.length]);
 
   const agents = deriveAgents(live);
   const runningCount = agents.filter((a) => a.status === "running").length;
@@ -355,6 +359,45 @@ export function Dashboard({ jobId, url, onReset }: DashboardProps) {
                 ? 28 + Math.round((claims.length / totalClaims) * 70)
                 : 35;
 
+  // ── Report state changes to parent (for sidebar history) ──
+  const stableOnStateUpdate = useCallback(
+    (updates: Partial<QueryHistoryEntry>) => onStateUpdate?.(updates),
+    [onStateUpdate],
+  );
+
+  useEffect(() => {
+    const historyStatus: QueryHistoryEntry["status"] =
+      live.phase === "complete"
+        ? "complete"
+        : live.phase === "error"
+          ? "error"
+          : "loading";
+
+    stableOnStateUpdate({
+      title: live.title,
+      status: historyStatus,
+      phase: PHASE_LABEL[live.phase],
+      score,
+      overallProgress,
+      trueClaims: trueClaims.length,
+      falseClaims: falseClaims.length,
+      uncertainClaims: uncertainClaims.length,
+      totalClaims,
+      processedClaims: live.processedClaims,
+    });
+  }, [
+    live.title,
+    live.phase,
+    score,
+    overallProgress,
+    trueClaims.length,
+    falseClaims.length,
+    uncertainClaims.length,
+    totalClaims,
+    live.processedClaims,
+    stableOnStateUpdate,
+  ]);
+
   // Build a filtered list that optionally includes pending placeholder rows
   type DisplayRow =
     | { kind: "claim"; claim: Claim; index: number }
@@ -382,7 +425,8 @@ export function Dashboard({ jobId, url, onReset }: DashboardProps) {
 
   return (
     <motion.div
-      className="min-h-screen flex flex-col bg-white"
+      className="flex flex-col bg-white"
+      style={{ minHeight: "100svh", height: "100svh", overflow: "hidden" }}
       style={{
         backgroundImage: "radial-gradient(circle, #d4d4d8 1px, transparent 1px)",
         backgroundSize: "20px 20px",
@@ -410,13 +454,26 @@ export function Dashboard({ jobId, url, onReset }: DashboardProps) {
           </span>
           <PhasePill phase={live.phase} />
         </div>
-        <button
-          onClick={onReset}
-          type="button"
-          className="flex-shrink-0 text-xs text-zinc-600 border border-zinc-200 rounded-md px-3 py-1.5 hover:bg-zinc-50 hover:border-zinc-300 transition-colors bg-white font-medium"
-        >
-          Check another
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              type="button"
+              className="flex items-center gap-1.5 text-xs text-zinc-500 border border-zinc-200 rounded-md px-3 py-1.5 hover:bg-zinc-50 hover:border-zinc-300 hover:text-zinc-700 transition-colors bg-white font-medium"
+              title="Re-analyze this URL"
+            >
+              <RotateCw size={11} />
+              Retry
+            </button>
+          )}
+          <button
+            onClick={onReset}
+            type="button"
+            className="text-xs text-zinc-600 border border-zinc-200 rounded-md px-3 py-1.5 hover:bg-zinc-50 hover:border-zinc-300 transition-colors bg-white font-medium"
+          >
+            Check another
+          </button>
+        </div>
       </header>
 
       {/* ── Global progress bar ── */}
@@ -438,7 +495,7 @@ export function Dashboard({ jobId, url, onReset }: DashboardProps) {
 
       {/* ── Main ── */}
       <main
-        className="flex-1 flex flex-col gap-3 w-full mx-auto box-border"
+        className="flex-1 flex flex-col gap-3 w-full mx-auto box-border overflow-y-auto"
         style={{ maxWidth: 1200, padding: "20px 20px 48px" }}
       >
         {/* Error banner */}
@@ -1112,13 +1169,20 @@ function TaskCarousel({
 
   return (
     <div className="relative" style={{ height: 42 }}>
-      {visible.length === 0 ? (
-        <div className="text-[11px] text-zinc-400 leading-tight mt-0.5 truncate font-mono">
-          {fallback}
-        </div>
-      ) : (
-        <AnimatePresence initial={false}>
-          {visible.map((t, i) => {
+      <AnimatePresence initial={false} mode="sync">
+        {visible.length === 0 ? (
+          <motion.div
+            key="fallback"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="absolute inset-x-0 text-[11px] text-zinc-400 leading-tight mt-0.5 truncate font-mono"
+          >
+            {fallback}
+          </motion.div>
+        ) : (
+          visible.map((t, i) => {
             const opacity = i === 0 ? 1 : i === 1 ? 0.55 : 0.25;
             const y = i * 14;
             const isHead = i === 0;
@@ -1158,9 +1222,9 @@ function TaskCarousel({
                 <span className="truncate">{t.label}</span>
               </motion.div>
             );
-          })}
-        </AnimatePresence>
-      )}
+          })
+        )}
+      </AnimatePresence>
     </div>
   );
 }
