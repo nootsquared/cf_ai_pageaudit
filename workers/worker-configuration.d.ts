@@ -11,7 +11,9 @@ declare namespace Cloudflare {
 		JOB_TRACKER: DurableObjectNamespace /* JobTracker */;
 	}
 }
-interface Env extends Cloudflare.Env {}
+interface Env extends Cloudflare.Env {
+  TAVILY_API_KEY: string;
+}
 
 // Begin runtime types
 /*! *****************************************************************************
