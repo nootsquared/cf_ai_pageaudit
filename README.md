@@ -1,73 +1,94 @@
-# React + TypeScript + Vite
+# SiteSeer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An AI-powered misinformation detector. Paste any URL and SiteSeer fetches the page, extracts factual claims, searches for evidence across trusted sources, and returns a per-claim verdict in real time.
 
-Currently, two official plugins are available:
+**Live:** [cf-ai-siteseer.pages.dev](https://cf-ai-siteseer.pages.dev)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## How It Works
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. Enter a URL in the search bar and press Enter
+2. SiteSeer fetches and parses the page content
+3. Llama 3.3 70B (via Cloudflare Workers AI) filters sentences down to verifiable factual claims
+4. Each claim is searched against the web via Tavily, with sources ranked by credibility tier (government, academic, fact-check, news)
+5. The LLM evaluates each claim against the evidence and returns a verdict: **true**, **false**, or **uncertain**
+6. Results appear live as analysis completes
 
-## Expanding the ESLint configuration
+---
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Cloudflare Stack
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+| Component | What it does |
+|-----------|-------------|
+| **Workers AI** (Llama 3.3 70B) | Claim extraction, query generation, verdict evaluation |
+| **Durable Objects** | Persistent job state that tracks progress and results across requests |
+| **Cloudflare Pages** | Hosts the React frontend |
+| **Cloudflare Worker** | API layer that orchestrates the full analysis pipeline |
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+External dependency: **Tavily API** for web search.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+---
+
+## Local Setup
+
+### Prerequisites
+- Node.js 18+
+- A [Cloudflare account](https://cloudflare.com) with Workers AI enabled
+- A [Tavily API key](https://tavily.com)
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/nootsquared/cf_ai_siteseer.git
+cd cf_ai_siteseer
+npm install
+cd workers && npm install && cd ..
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### 2. Configure the worker
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Create `workers/.dev.vars`:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
 ```
+TAVILY_API_KEY=your_tavily_key_here
+```
+
+### 3. Run locally
+
+In one terminal, start the worker:
+```bash
+cd workers
+npx wrangler dev --remote
+```
+
+In another, start the frontend:
+```bash
+npm run dev
+```
+
+Frontend runs at `http://localhost:5173`, worker at `http://localhost:8787`.
+
+---
+
+## Deploying
+
+### Worker (backend)
+
+```bash
+cd workers
+npx wrangler deploy
+npx wrangler secret put TAVILY_API_KEY
+```
+
+Copy the worker URL printed after deploy (e.g. `https://siteseer-api.<subdomain>.workers.dev`).
+
+### Frontend (Cloudflare Pages)
+
+In the Cloudflare dashboard, create a Pages project connected to this repo with:
+
+| Setting | Value |
+|---------|-------|
+| Build command | `npm run build` |
+| Build output directory | `dist` |
+| Environment variable | `VITE_WORKER_URL` = your worker URL |
