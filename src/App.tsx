@@ -266,18 +266,26 @@ export default function App() {
             </motion.div>
           ) : (
             /* ── Dashboard ── */
-            <Dashboard
+            <motion.div
               key={active.jobId}
-              jobId={active.jobId}
-              url={active.url}
-              initialState={active.initialState}
-              isHistoricalView={isHistoricalView}
-              queryPosition={queryPositionIndex >= 0 ? { index: queryPositionIndex + 1, total: queryHistory.length } : undefined}
-              onReset={handleReset}
-              onRetry={() => handleRetry({ jobId: active.jobId, url: active.url } as QueryHistoryEntry)}
-              onStateUpdate={(updates) => updateHistoryEntry(active.jobId, updates)}
-              onSelectLatest={isHistoricalView && latestEntry ? () => handleSelectHistory(latestEntry) : undefined}
-            />
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              style={{ flex: 1, display: "flex", flexDirection: "column" }}
+            >
+              <Dashboard
+                jobId={active.jobId}
+                url={active.url}
+                initialState={active.initialState}
+                isHistoricalView={isHistoricalView}
+                queryPosition={queryPositionIndex >= 0 ? { index: queryPositionIndex + 1, total: queryHistory.length } : undefined}
+                onReset={handleReset}
+                onRetry={() => handleRetry({ jobId: active.jobId, url: active.url } as QueryHistoryEntry)}
+                onStateUpdate={(updates) => updateHistoryEntry(active.jobId, updates)}
+                onSelectLatest={isHistoricalView && latestEntry ? () => handleSelectHistory(latestEntry) : undefined}
+              />
+            </motion.div>
           )}
         </AnimatePresence>
       </div>

@@ -448,7 +448,7 @@ export function Dashboard({ jobId, url, initialState, isHistoricalView, queryPos
 
   return (
     <DashboardErrorBoundary>
-    <motion.div
+    <div
       className="flex flex-col bg-white"
       style={{
         minHeight: "100svh",
@@ -457,10 +457,6 @@ export function Dashboard({ jobId, url, initialState, isHistoricalView, queryPos
         backgroundImage: "radial-gradient(circle, #d4d4d8 1px, transparent 1px)",
         backgroundSize: "20px 20px",
       }}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
     >
       {/* ── Navbar ── */}
       <header
@@ -866,7 +862,7 @@ export function Dashboard({ jobId, url, initialState, isHistoricalView, queryPos
           </div>
         </motion.div>
       </main>
-    </motion.div>
+    </div>
     </DashboardErrorBoundary>
   );
 }
@@ -1157,9 +1153,11 @@ function AgentRing({
 const AgentSection = React.memo(function AgentSection({
   agentKey,
   tasks,
+  isJobComplete,
 }: {
   agentKey: AgentKey;
   tasks: TaskLogEntry[];
+  isJobComplete: boolean;
 }) {
   const cfg = AGENT_META[agentKey];
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1168,9 +1166,9 @@ const AgentSection = React.memo(function AgentSection({
   const hasRunning = tasks.some((t) => t.status === "running");
   const agentStatus: "pending" | "running" | "complete" = !hasTasks
     ? "pending"
-    : hasRunning
-      ? "running"
-      : "complete";
+    : isJobComplete || !hasRunning
+      ? "complete"
+      : "running";
 
   // Only show latest 30 tasks to prevent performance degradation
   const visibleTasks = tasks.slice(-30);
@@ -1448,7 +1446,7 @@ function AgentOrchestrator({
       {/* 2×2 agent grid */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         {(["fetch", "extract", "evidence", "judge"] as AgentKey[]).map((key) => (
-          <AgentSection key={key} agentKey={key} tasks={tasksByAgent[key]} />
+          <AgentSection key={key} agentKey={key} tasks={tasksByAgent[key]} isJobComplete={phase === "complete"} />
         ))}
       </div>
 

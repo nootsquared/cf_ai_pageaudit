@@ -45,6 +45,9 @@ export async function extractClaims(url: string): Promise<ExtractionResult> {
   const blocks: string[] = [];
   let current = '';
   let title = '';
+  let ogTitle = '';
+  let h1Text = '';
+  let h1Done = false;
   // Track nesting depth of style/script elements so their text is suppressed
   let suppressDepth = 0;
 
@@ -52,6 +55,19 @@ export async function extractClaims(url: string): Promise<ExtractionResult> {
     .on('title', {
       text(chunk) {
         title += chunk.text;
+      },
+    })
+    .on('meta[property="og:title"]', {
+      element(el) {
+        ogTitle = el.getAttribute('content') ?? '';
+      },
+    })
+    .on('h1', {
+      text(chunk) {
+        if (!h1Done) h1Text += chunk.text;
+      },
+      element(el) {
+        el.onEndTag(() => { h1Done = true; });
       },
     })
     // Suppress text inside <style> and <script> regardless of nesting
@@ -108,8 +124,9 @@ export async function extractClaims(url: string): Promise<ExtractionResult> {
         ),
     );
 
+  const bestTitle = ogTitle.trim() || h1Text.trim() || title.trim();
   return {
-    title: decodeHtmlEntities(title.trim()),
+    title: decodeHtmlEntities(bestTitle),
     claims: [...new Set(sentences)],
   };
 }
