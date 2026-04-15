@@ -118,20 +118,48 @@ export default {
         );
       }
 
+      const UA_BROWSER =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
       try {
-        const ac = new AbortController();
-        const timer = setTimeout(() => ac.abort(), 8_000);
-        const probe = await fetch(parsed.toString(), {
-          method: "HEAD",
+        // ── 1. Try HEAD first (no body download, fast) ─────────────────────────
+        let probeStatus: number | null = null;
+        try {
+          const headAc = new AbortController();
+          const headTimer = setTimeout(() => headAc.abort(), 5_000);
+          const headRes = await fetch(parsed.toString(), {
+            method: "HEAD",
+            headers: { "User-Agent": UA_BROWSER },
+            redirect: "follow",
+            signal: headAc.signal,
+          });
+          clearTimeout(headTimer);
+          probeStatus = headRes.status;
+        } catch {
+          // HEAD timed out or the server rejected it — fall through to GET
+        }
+
+        if (probeStatus !== null) {
+          return jsonCors({ ok: true, status: probeStatus });
+        }
+
+        // ── 2. Fallback: GET and cancel body immediately after headers ──────────
+        const getAc = new AbortController();
+        const getTimer = setTimeout(() => getAc.abort(), 10_000);
+        const getRes = await fetch(parsed.toString(), {
+          method: "GET",
           headers: {
-            "User-Agent":
-              "Mozilla/5.0 (compatible; SiteSeer/1.0; +https://siteseer.dev)",
+            "User-Agent": UA_BROWSER,
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
           },
           redirect: "follow",
-          signal: ac.signal,
+          signal: getAc.signal,
         });
-        clearTimeout(timer);
-        return jsonCors({ ok: true, status: probe.status });
+        clearTimeout(getTimer);
+        // Discard body — we only need the status code
+        await getRes.body?.cancel();
+        return jsonCors({ ok: true, status: getRes.status });
       } catch (e) {
         const msg =
           (e as Error).name === "AbortError"
