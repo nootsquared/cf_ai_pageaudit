@@ -57,6 +57,7 @@ export default function App() {
   const [inputUrl, setInputUrl] = useState("");
   const [submit, setSubmit] = useState<SubmitState>({ kind: "idle" });
   const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
+  const [navKey, setNavKey] = useState(0);
 
   const addHistoryEntry = useCallback((jobId: string, url: string) => {
     entryCounter += 1;
@@ -117,6 +118,7 @@ export default function App() {
   };
 
   const handleReset = () => {
+    setNavKey((k) => k + 1);
     setSubmit({ kind: "idle" });
     setInputUrl("");
   };
@@ -135,6 +137,7 @@ export default function App() {
   };
 
   const handleSelectHistory = (entry: QueryHistoryEntry) => {
+    setNavKey((k) => k + 1);
     setSubmit({ kind: "active", jobId: entry.jobId, url: entry.url, initialState: entry.cachedState });
   };
 
@@ -161,7 +164,7 @@ export default function App() {
 
       {/* Main content area */}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflowY: "auto" }}>
-        <AnimatePresence mode="wait">
+        <AnimatePresence>
           {!active ? (
             /* ── Landing ── */
             <motion.div
@@ -267,7 +270,7 @@ export default function App() {
           ) : (
             /* ── Dashboard ── */
             <motion.div
-              key={active.jobId}
+              key={`dash-${navKey}`}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
