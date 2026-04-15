@@ -29,15 +29,42 @@ function isGarbageBlock(raw: string): boolean {
 }
 
 export async function extractClaims(url: string): Promise<ExtractionResult> {
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-    redirect: 'follow',
-  });
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 25_000);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        // Full Chrome 131 header set — Cloudflare bot detection inspects these
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'max-age=0',
+        'Upgrade-Insecure-Requests': '1',
+        // Client hint headers Chrome sends automatically for HTTPS navigation
+        'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"macOS"',
+        // Sec-Fetch headers — Cloudflare uses these to identify real browser navigations
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+      },
+      redirect: 'follow',
+      signal: ac.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    const msg = (e as Error).name === 'AbortError'
+      ? `Timed out fetching ${url} after 25 s`
+      : `Failed to fetch ${url}: ${(e as Error).message}`;
+    throw new Error(msg);
+  }
+  clearTimeout(timer);
+
   if (!response.ok) {
     throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
   }

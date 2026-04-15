@@ -4,6 +4,8 @@ An AI-powered misinformation detector. Paste any URL and SiteSeer fetches the pa
 
 **Live:** [cf-ai-siteseer.pages.dev](https://cf-ai-siteseer.pages.dev)
 
+**Try it with:** [The Flat Earth Society FAQ](https://www.theflatearthsociety.org/home/index.php/about-the-society/faq)
+
 ---
 
 ## How It Works
