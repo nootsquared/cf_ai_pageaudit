@@ -121,31 +121,26 @@ export default {
       const UA_BROWSER =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+      // ── 1. Try HEAD first (no body download, fast) ───────────────────────────
       try {
-        // ── 1. Try HEAD first (no body download, fast) ─────────────────────────
-        let probeStatus: number | null = null;
-        try {
-          const headAc = new AbortController();
-          const headTimer = setTimeout(() => headAc.abort(), 5_000);
-          const headRes = await fetch(parsed.toString(), {
-            method: "HEAD",
-            headers: { "User-Agent": UA_BROWSER },
-            redirect: "follow",
-            signal: headAc.signal,
-          });
-          clearTimeout(headTimer);
-          probeStatus = headRes.status;
-        } catch {
-          // HEAD timed out or the server rejected it — fall through to GET
-        }
+        const headAc = new AbortController();
+        const headTimer = setTimeout(() => headAc.abort(), 5_000);
+        const headRes = await fetch(parsed.toString(), {
+          method: "HEAD",
+          headers: { "User-Agent": UA_BROWSER },
+          redirect: "follow",
+          signal: headAc.signal,
+        });
+        clearTimeout(headTimer);
+        return jsonCors({ ok: true, status: headRes.status });
+      } catch {
+        // HEAD timed out or the server rejected it — fall through to GET
+      }
 
-        if (probeStatus !== null) {
-          return jsonCors({ ok: true, status: probeStatus });
-        }
-
-        // ── 2. Fallback: GET and cancel body immediately after headers ──────────
+      // ── 2. Fallback: GET with short timeout ──────────────────────────────────
+      try {
         const getAc = new AbortController();
-        const getTimer = setTimeout(() => getAc.abort(), 10_000);
+        const getTimer = setTimeout(() => getAc.abort(), 8_000);
         const getRes = await fetch(parsed.toString(), {
           method: "GET",
           headers: {
@@ -157,16 +152,16 @@ export default {
           signal: getAc.signal,
         });
         clearTimeout(getTimer);
-        // Discard body — we only need the status code
-        await getRes.body?.cancel();
         return jsonCors({ ok: true, status: getRes.status });
-      } catch (e) {
-        const msg =
-          (e as Error).name === "AbortError"
-            ? "Request timed out — the site took too long to respond"
-            : `Unreachable: ${(e as Error).message}`;
-        return jsonCors({ ok: false, error: msg }, { status: 200 });
+      } catch {
+        // GET also failed — fall through to fail-open
       }
+
+      // ── 3. Fail-open: if we can't probe the URL, assume it may be reachable ──
+      // Some sites block bot probes (JS challenges, IP filtering, etc.) but are
+      // perfectly valid. Let the job attempt the analysis and fail gracefully if
+      // the URL truly cannot be fetched.
+      return jsonCors({ ok: true, status: 0 });
     }
 
     // ── POST /jobs — create a new fact-check job ──────────────────────────────
