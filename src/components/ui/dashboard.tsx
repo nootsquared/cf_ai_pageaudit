@@ -289,6 +289,12 @@ export function Dashboard({ jobId, url, initialState, isHistoricalView, queryPos
   const { state, pollError } = useJob(isTerminalInitial ? null : jobId);
   const [activeFilter, setActiveFilter] = useState<FilterTab>("all");
 
+  // Refs used for cleanup on unmount — ensures cachedState is always flushed to parent
+  // even if the user navigates away before the async useEffect fires.
+  const onStateUpdateRef = useRef(onStateUpdate);
+  onStateUpdateRef.current = onStateUpdate;
+  const latestLiveRef = useRef<JobState | null>(null);
+
   // Use polled state, then cached initial state (for historical navigation), then empty placeholder
   const live: JobState = state ?? initialState ?? {
     id: jobId,
@@ -321,6 +327,9 @@ export function Dashboard({ jobId, url, initialState, isHistoricalView, queryPos
     if (evidenced === 0) return evaluated > 0 ? 50 : 0; // all uncertain → neutral
     return Math.round((trueClaims.length / evidenced) * 100);
   }, [evaluated, trueClaims.length, falseClaims.length]);
+
+  // Always keep the latest live state in a ref so the cleanup effect can flush it
+  latestLiveRef.current = live;
 
   const agents = deriveAgents(live);
   const runningCount = agents.filter((a) => a.status === "running").length;
@@ -420,6 +429,19 @@ export function Dashboard({ jobId, url, initialState, isHistoricalView, queryPos
     live.processedClaims,
     stableOnStateUpdate,
   ]);
+
+  // On unmount: flush the latest live state to parent so sidebar history always
+  // has fresh data — guards against the race where the user navigates away before
+  // the async useEffect above has a chance to fire.
+  useEffect(() => {
+    return () => {
+      const latest = latestLiveRef.current;
+      if (latest && latest.phase !== "queued") {
+        onStateUpdateRef.current?.({ cachedState: latest });
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Build a filtered list that optionally includes pending placeholder rows
   type DisplayRow =
@@ -632,7 +654,7 @@ export function Dashboard({ jobId, url, initialState, isHistoricalView, queryPos
         </div>
 
         {/* ── Middle Row: Agent Terminal + Sources ── */}
-        <div className="grid gap-3 items-start" style={{ gridTemplateColumns: "3fr 2fr" }}>
+        <div className="grid gap-3 items-stretch" style={{ gridTemplateColumns: "3fr 2fr" }}>
 
           {/* Agent Orchestration Panel */}
           <AgentOrchestrator
@@ -648,7 +670,6 @@ export function Dashboard({ jobId, url, initialState, isHistoricalView, queryPos
           <motion.div
             layout
             className="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col overflow-hidden"
-            style={{ height: 280 }}
             {...fadeUp(0.26)}
           >
             <div className="flex items-center justify-between mb-3 flex-shrink-0">
@@ -1164,6 +1185,10 @@ const AgentSection = React.memo(function AgentSection({
   const hasTasks = tasks.length > 0;
   const doneTasks = tasks.filter((t) => t.status === "done" || t.status === "error").length;
   const hasRunning = tasks.some((t) => t.status === "running");
+  // When the overall job is complete, treat all remaining "running" tasks as done
+  // so the ring, step count, and task icons all reflect the finished state.
+  const effectiveDone = isJobComplete ? tasks.length : doneTasks;
+  const effectiveRunning = !isJobComplete && hasRunning;
   const agentStatus: "pending" | "running" | "complete" = !hasTasks
     ? "pending"
     : isJobComplete || !hasRunning
@@ -1198,7 +1223,7 @@ const AgentSection = React.memo(function AgentSection({
           borderBottom: hasTasks ? `1px solid ${cfg.border}` : "none",
         }}
       >
-        <AgentRing done={doneTasks} total={tasks.length} running={hasRunning} />
+        <AgentRing done={effectiveDone} total={tasks.length} running={effectiveRunning} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
@@ -1214,7 +1239,7 @@ const AgentSection = React.memo(function AgentSection({
             {cfg.label}
           </div>
           <div style={{ fontSize: 10, color: hasTasks ? "#71717a" : "#a1a1aa", marginTop: 2, lineHeight: 1.2 }}>
-            {hasTasks ? `${doneTasks} of ${tasks.length} steps done` : "Waiting to start"}
+            {hasTasks ? `${effectiveDone} of ${tasks.length} steps done` : "Waiting to start"}
           </div>
         </div>
         <span
@@ -1258,8 +1283,12 @@ const AgentSection = React.memo(function AgentSection({
           <AnimatePresence initial={false}>
             {visibleTasks.map((task) => {
               const { isSubtask, claimBadge, text } = parseTaskLabel(task.label);
-              const isRunning = task.status === "running";
-              const isError = task.status === "error";
+              // When the job is complete, any task still marked "running" in the backend
+              // data should render as "done" — the backend may not have flushed the final
+              // status update before the job was marked complete.
+              const effectiveStatus = isJobComplete && task.status === "running" ? "done" : task.status;
+              const isRunning = effectiveStatus === "running";
+              const isError = effectiveStatus === "error";
 
               return (
                 <motion.div
@@ -1284,7 +1313,7 @@ const AgentSection = React.memo(function AgentSection({
 
                   {/* Status icon */}
                   <div style={{ flexShrink: 0, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center", marginTop: 1 }}>
-                    <TaskStatusIcon status={task.status} size={13} />
+                    <TaskStatusIcon status={effectiveStatus} size={13} />
                   </div>
 
                   {/* Label */}
@@ -1359,9 +1388,9 @@ function AgentOrchestrator({
     return groups;
   }, [tasks]);
 
-  const doneTaskCount = tasks.filter(
-    (t) => t.status === "done" || t.status === "error",
-  ).length;
+  const doneTaskCount = phase === "complete"
+    ? tasks.length
+    : tasks.filter((t) => t.status === "done" || t.status === "error").length;
 
   return (
     <motion.div
