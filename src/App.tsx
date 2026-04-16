@@ -163,7 +163,7 @@ export default function App() {
       )}
 
       {/* Main content area */}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflowY: "auto" }}>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <AnimatePresence mode="popLayout">
           {!active ? (
             /* ── Landing ── */
